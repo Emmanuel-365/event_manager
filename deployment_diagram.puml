@@ -1,0 +1,93 @@
+@startuml
+title Deployment Architecture - Event Management SaaS
+
+actor "Web User" as WebUser
+actor "Mobile User (Flutter)" as MobileUser
+
+cloud "Public Network / DMZ" {
+  node "Load Balancer / Reverse Proxy" as LoadBalancer
+}
+
+package "Internal Docker Swarm Network" {
+  frame "Docker Swarm Cluster" {
+    node "Manager1"
+    node "Manager2"
+    node "Manager3"
+    node "Worker1" {
+      package "Application Services Worker1" {
+        component "Web Service (Nginx)" as WebService
+        component "PHP-FPM Service" as PHPFPMService
+      }
+    }
+    node "Worker2" {
+      package "Application Services Worker2" {
+        component "Redis Service" as RedisService
+        component "Queue Worker Service" as QueueWorkerService
+      }
+    }
+    note right of Worker2 : Docker Swarm manages secrets for services.
+  }
+
+  ' Removed redundant Worker1 and Worker2 definitions that were outside the cluster frame
+
+  package "Databases" {
+    database "Central Database (PostgreSQL)" as CentralDB
+    database "Tenant Databases (PostgreSQL)" as TenantDBs
+    note right of TenantDBs : One DB per Tenant
+  }
+}
+
+package "DevOps Tools" {
+  component "CI/CD Pipeline" as CICDPipeline
+  component "Monitoring (Prometheus/Grafana)" as Monitoring
+  component "Logging (ELK Stack)" as Logging
+  component "Backup System" as BackupSystem
+  ' SecretManagement component removed, handled by a note
+  component "Persistent Volumes" as PersistentVolumes
+}
+
+WebUser --> LoadBalancer : HTTP(S)
+MobileUser --> LoadBalancer : API Requests (HTTPS)
+LoadBalancer --> WebService : Forwards Requests ' WebService is on Worker1
+
+' Application Service Interactions
+WebService --> PHPFPMService : Proxies Requests ' Both on Worker1
+PHPFPMService --> RedisService : Cache, Job Dispatch ' PHPFPM on W1, Redis on W2
+PHPFPMService --> QueueWorkerService : Dispatches Jobs ' PHPFPM on W1, QueueWorker on W2
+PHPFPMService --> CentralDB : SQL Queries
+PHPFPMService --> TenantDBs : SQL Queries
+
+QueueWorkerService --> RedisService : Fetches Jobs ' Both on Worker2
+QueueWorkerService --> CentralDB : Data Sync
+QueueWorkerService --> TenantDBs : Data Sync
+
+' DevOps Tools Interactions
+CICDPipeline --> Manager1 : Deployment Automation
+
+' Monitoring: Sources send metrics TO Monitoring system
+Worker1 --> Monitoring : System Metrics
+Worker2 --> Monitoring : System Metrics
+WebService --> Monitoring : Traffic Metrics
+PHPFPMService --> Monitoring : App Performance
+RedisService --> Monitoring : Performance Metrics
+CentralDB --> Monitoring : DB Performance
+TenantDBs --> Monitoring : DB Performance
+
+' Logging: Sources send logs TO Logging system
+WebService --> Logging : Access/Error Logs
+PHPFPMService --> Logging : App Logs
+QueueWorkerService --> Logging : Worker Logs
+CentralDB --> Logging : DB Logs (optional)
+TenantDBs --> Logging : DB Logs (optional)
+
+' Backup System
+BackupSystem --> CentralDB : Backs up
+BackupSystem --> TenantDBs : Backs up
+BackupSystem --> PersistentVolumes : Backs up (e.g. media)
+
+' Persistent Volumes
+CentralDB ..> PersistentVolumes : uses
+TenantDBs ..> PersistentVolumes : uses
+PHPFPMService --> PersistentVolumes : Stores/Retrieves Media Files
+
+@enduml
